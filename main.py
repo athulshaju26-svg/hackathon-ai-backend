@@ -1,48 +1,38 @@
-from fastapi import FastAPI, UploadFile, File
-import whisper
-import openai
+from fastapi import FastAPI, UploadFile, File, Form
 import os
-import json
+from openai import OpenAI
 
-app = FastAPI(title="Hackathon AI Summarizer")
+app = FastAPI()
 
-# Load Whisper model
-model = whisper.load_model("base")
-
-# Use default API key from environment
-openai.api_key = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 @app.post("/summarize")
-async def summarize(file: UploadFile = File(...)):
-    # Convert audio to text
-    if file.content_type.startswith("audio"):
-        path = file.filename
-        with open(path, "wb") as f:
-            f.write(await file.read())
-        text = model.transcribe(path)["text"]
-        os.remove(path)
-    else:
-        text = (await file.read()).decode()
+async def summarize(
+    file: UploadFile = File(None),
+    text: str = Form(None)
+):
+    try:
+        # STEP 1: Get text from audio if file uploaded
+        if file:
+            audio_bytes = await file.read()
 
-    # Generate JSON summary
-    prompt = f"""
-    Summarize this conversation into JSON format:
+            transcript = client.audio.transcriptions.create(
+                model="gpt-4o-mini-transcribe",
+                file=(file.filename, audio_bytes)
+            )
 
-    {text}
+            text = transcript.text
 
-    Format:
-    {{
-      "summary": "",
-      "topics": [],
-      "action_items": [],
-      "sentiment": ""
-    }}
-    """
+        # STEP 2: Summarize text
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "Summarize conversation into JSON with key points."},
+                {"role": "user", "content": text}
+            ]
+        )
 
-    response = openai.ChatCompletion.create(
-        model="gpt-4",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0
-    )
+        return {"summary": response.choices[0].message.content}
 
-    return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        return {"error": str(e)}
